@@ -1,18 +1,33 @@
-# Tinfoil Containers config for the hush confidential bot computer.
-# The image is built from the hush repo's infra/computer and pinned by digest;
-# the attestation measurement commits to this file, so clients can verify the
-# exact code an enclave runs.
+# Tinfoil Containers config for the hush confidential bot computer. The attestation
+# measurement commits to this file, so clients verify the exact code an enclave runs.
 cvm-version: "0.14.12"
 cpus: 2
 memory: 8192
 
+# Egress for the bot's browser. Tinfoil blocks private/RFC1918 ranges even on open egress.
+# Tighter deployments can use `egress: allowlist` with an `allow:` list of hostnames.
+networks:
+  web:
+    egress: open
+
 containers:
   - name: hush-computer
-    image: "docker.io/xzed/hush-computer:v0.0.1@sha256:a5437142f41216f63fe9511bd8a869d377f8f355c4d9122f439f8ce40e7a5899"
+    # Must be a linux/amd64 image: enclaves are x86_64. publish.sh builds that platform.
+    image: "docker.io/xzed/hush-computer:v0.0.2@sha256:8424c9eb6849e78e24d67f342f0066c67be1af0c1f01d187a2e310b77c64d9ab"
+    user: "1000:1000"
+    networks:
+      - web
     secrets:
-      - HUSH_CONTROL_TOKEN # declared by name; the value lives only in Tinfoil's secret store
-    read_only: false # the desktop writes to /home/hush and /tmp (all ramdisk; not durable)
-    shm_size: 1g # Chromium crashes with a small /dev/shm at 1920x1200
+      - HUSH_CONTROL_TOKEN   # value: printf '%s' "$TOKEN" | tinfoil secret create HUSH_CONTROL_TOKEN --value-file -
+    # Read-only root filesystem. The desktop writes only to these ramdisks, which reset on
+    # every restart. Validated with `docker run --read-only` (README.md, "Strict defaults").
+    read_only: true
+    tmpfs:
+      /home/hush: "uid=1000,gid=1000,mode=0700,exec"   # exec: tools the bot installs at home must run
+      /tmp: "mode=1777"
+      /var/tmp: "mode=1777"
+    shm_size: 1g              # Chromium crashes with a small /dev/shm at 1920x1200
+    pids_limit: 2048
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:7070/healthz"]
@@ -20,6 +35,8 @@ containers:
       timeout: 5s
       start_period: 2m
 
+# No cvm-network inbound ports (no SSH), no debug, and no origins: only the hush API talks
+# to the enclave, never a browser.
 shim:
   upstream-port: 7070
   paths:
